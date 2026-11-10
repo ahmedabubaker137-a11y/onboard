@@ -1,0 +1,659 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// 1. Tenant Data
+model Company {
+  id              String               @id @default(cuid())
+  name            String
+  slug            String               @unique
+  logoUrl         String?
+  primaryColor    String?              @default("#274C4A")
+  accentColor     String?              @default("#D98A1E")
+  createdAt       DateTime             @default(now())
+  updatedAt       DateTime             @updatedAt
+
+  users           User[]
+  employees       Employee[]
+  departments     Department[]
+  roles           Role[]
+  templates       OnboardingTemplate[]
+  assets          Asset[]
+  benefits        Benefit[]
+  surveys         Survey[]
+  auditLogs       AuditLog[]
+  apiKeys         ApiKey[]
+  webhooks        Webhook[]
+  integrations    Integration[]
+  customFields    CustomField[]
+  subscriptions   Subscription[]
+  documentTemplates DocumentTemplate[]
+}
+
+// 2. Staff Users (HR, IT, Managers, Admins)
+model User {
+  id           String       @id @default(cuid())
+  companyId    String
+  company      Company      @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  email        String       @unique
+  name         String
+  role         UserRole     @default(HR_MANAGER)
+  avatarUrl    String?
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+
+  auditLogs    AuditLog[]
+  notifications Notification[]
+
+  @@index([companyId])
+}
+
+enum UserRole {
+  ADMIN
+  HR_MANAGER
+  IT_PROVISIONER
+  MANAGER
+  EMPLOYEE
+}
+
+// 3. New Hires
+model Employee {
+  id             String          @id @default(cuid())
+  companyId      String
+  company        Company         @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  firstName      String
+  lastName       String
+  email          String          @unique
+  jobTitle       String
+  departmentId   String?
+  department     Department?     @relation(fields: [departmentId], references: [id])
+  roleId         String?
+  roleRef        Role?           @relation(fields: [roleId], references: [id])
+  managerId      String?
+  manager        Employee?       @relation("ManagementChain", fields: [managerId], references: [id])
+  directReports  Employee[]      @relation("ManagementChain")
+  startDate      DateTime
+  status         OnboardingStatus @default(INVITED)
+  progress       Int             @default(0) // Percentage 0 - 100
+  phone          String?
+  avatarUrl      String?
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+
+  tasks          EmployeeTask[]
+  documents      Document[]
+  signatures     Signature[]
+  assets         EmployeeAsset[]
+  benefits       EmployeeBenefit[]
+  surveyResponses SurveyResponse[]
+  teamMember     TeamMember?
+  notifications  Notification[]
+
+  @@index([companyId])
+  @@index([departmentId])
+}
+
+enum OnboardingStatus {
+  INVITED
+  IN_PROGRESS
+  REVIEW_PENDING
+  COMPLETED
+  OFFBOARDED
+}
+
+// 4. Departments
+model Department {
+  id          String       @id @default(cuid())
+  companyId   String
+  company     Company      @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  name        String
+  description String?
+  createdAt   DateTime     @default(now())
+
+  employees   Employee[]
+  templates   OnboardingTemplate[]
+
+  @@unique([companyId, name])
+}
+
+// 5. Roles / Job Titles
+model Role {
+  id          String       @id @default(cuid())
+  companyId   String
+  company     Company      @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  title       String
+  level       String?      // Junior, Mid, Senior, Director, VP
+  createdAt   DateTime     @default(now())
+
+  employees   Employee[]
+
+  @@unique([companyId, title])
+}
+
+// 6. Onboarding Templates
+model OnboardingTemplate {
+  id           String       @id @default(cuid())
+  companyId    String
+  company      Company      @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  title        String
+  description  String?
+  departmentId String?
+  department   Department?  @relation(fields: [departmentId], references: [id])
+  targetRole   String?
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+
+  tasks        Task[]
+
+  @@index([companyId])
+}
+
+// 7. Individual Checklist Items in Templates
+model Task {
+  id          String             @id @default(cuid())
+  templateId  String
+  template    OnboardingTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  title       String
+  description String?
+  category    TaskCategory       @default(GENERAL)
+  dueDays     Int                @default(1) // Relative due day offset (e.g., Day 1, Day 7)
+  isRequired  Boolean            @default(true)
+  order       Int                @default(0)
+
+  employeeTasks EmployeeTask[]
+
+  @@index([templateId])
+}
+
+enum TaskCategory {
+  GENERAL
+  LEGAL_DOCUMENT
+  IT_PROVISIONING
+  TRAINING
+  TEAM_ORIENTATION
+  BENEFITS
+}
+
+// 8. Assigned Tasks with Completion Status
+model EmployeeTask {
+  id           String       @id @default(cuid())
+  employeeId   String
+  employee     Employee     @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  taskId       String?
+  taskRef      Task?        @relation(fields: [taskId], references: [id], onDelete: SetNull)
+  title        String
+  description  String?
+  category     TaskCategory @default(GENERAL)
+  status       TaskStatus   @default(PENDING)
+  assignedTo   DepartmentType @default(EMPLOYEE)
+  dueDate      DateTime?
+  completedAt  DateTime?
+  verifiedBy   String?
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+
+  @@index([employeeId])
+  @@index([status])
+}
+
+enum TaskStatus {
+  PENDING
+  IN_PROGRESS
+  VERIFICATION_REQUIRED
+  COMPLETED
+  OVERDUE
+}
+
+enum DepartmentType {
+  EMPLOYEE
+  HR
+  IT
+  MANAGER
+}
+
+// 9. Uploaded Files / Documents
+model Document {
+  id           String         @id @default(cuid())
+  employeeId   String
+  employee     Employee       @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  title        String
+  fileUrl      String
+  fileType     String
+  fileSize     Int
+  status       DocumentStatus @default(PENDING)
+  verifiedAt   DateTime?
+  createdAt    DateTime       @default(now())
+
+  signatures   Signature[]
+
+  @@index([employeeId])
+}
+
+enum DocumentStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+// 10. Document Templates (Contracts, NDAs, Offer Letters)
+model DocumentTemplate {
+  id          String   @id @default(cuid())
+  companyId   String
+  company     Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  title       String
+  content     String   // Markdown / HTML template
+  category    String   // Contract, Handbook, Policy
+  createdAt   DateTime @default(now())
+
+  @@index([companyId])
+}
+
+// 11. Cryptographic Signatures
+model Signature {
+  id          String    @id @default(cuid())
+  employeeId  String
+  employee    Employee  @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  documentId  String?
+  document    Document? @relation(fields: [documentId], references: [id])
+  docTitle    String
+  signatureData String  // Base64 SVG or Path data
+  cryptoHash  String    // SHA-256 fingerprint of payload
+  ipAddress   String?
+  signedAt    DateTime  @default(now())
+
+  @@index([employeeId])
+}
+
+// 12. Hardware Assets (Inventory)
+model Asset {
+  id           String        @id @default(cuid())
+  companyId    String
+  company      Company       @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  name         String        // e.g. MacBook Pro M3 Max
+  serialNumber String        @unique
+  category     AssetCategory @default(LAPTOP)
+  model        String
+  status       AssetStatus   @default(AVAILABLE)
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+
+  assignments  EmployeeAsset[]
+
+  @@index([companyId])
+}
+
+enum AssetCategory {
+  LAPTOP
+  MONITOR
+  SECURITY_KEY
+  MOBILE_DEVICE
+  PERIPHERAL
+}
+
+enum AssetStatus {
+  AVAILABLE
+  ASSIGNED
+  MAINTENANCE
+  RETIRED
+}
+
+// 13. Asset Checkout Records
+model EmployeeAsset {
+  id           String    @id @default(cuid())
+  employeeId   String
+  employee     Employee  @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  assetId      String
+  asset        Asset     @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  assignedAt   DateTime  @default(now())
+  returnedAt   DateTime?
+  condition    String?   @default("Excellent")
+  notes        String?
+
+  @@index([employeeId])
+  @@index([assetId])
+}
+
+// 14. Benefits Catalog
+model Benefit {
+  id          String          @id @default(cuid())
+  companyId   String
+  company     Company         @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  name        String          // Comprehensive Health Plus
+  provider    String          // BlueCross, Delta, Vanguard
+  type        BenefitType     @default(HEALTH)
+  description String?
+  costMonthly Float           @default(0.0)
+  createdAt   DateTime        @default(now())
+
+  elections   EmployeeBenefit[]
+
+  @@index([companyId])
+}
+
+enum BenefitType {
+  HEALTH
+  DENTAL
+  VISION
+  RETIREMENT_401K
+  WELLNESS_STIPEND
+}
+
+// 15. Employee Benefits Elections
+model EmployeeBenefit {
+  id          String   @id @default(cuid())
+  employeeId  String
+  employee    Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  benefitId   String
+  benefit     Benefit  @relation(fields: [benefitId], references: [id], onDelete: Cascade)
+  tier        String   @default("Employee Only") // Employee Only, Employee + Spouse, Family
+  electedAt   DateTime @default(now())
+
+  @@unique([employeeId, benefitId])
+}
+
+// 16. Onboarding Check-in Surveys
+model Survey {
+  id          String     @id @default(cuid())
+  companyId   String
+  company     Company    @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  milestone   SurveyType @default(DAY_30)
+  title       String
+  description String?
+  createdAt   DateTime   @default(now())
+
+  responses   SurveyResponse[]
+
+  @@index([companyId])
+}
+
+enum SurveyType {
+  DAY_30
+  DAY_60
+  DAY_90
+}
+
+// 17. Survey Responses
+model SurveyResponse {
+  id          String   @id @default(cuid())
+  surveyId    String
+  survey      Survey   @relation(fields: [surveyId], references: [id], onDelete: Cascade)
+  employeeId  String
+  employee    Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  eNPSScore   Int      // 1 to 10
+  feedback    String?
+  submittedAt DateTime @default(now())
+
+  @@index([surveyId])
+  @@index([employeeId])
+}
+
+// 18. Audit Logs (Immutable Integrity Tracking)
+model AuditLog {
+  id          String   @id @default(cuid())
+  companyId   String
+  company     Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  userId      String?
+  user        User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  actorEmail  String
+  action      String   // e.g. "DOCUMENT_SIGNED", "EMPLOYEE_ONBOARDED", "ASSET_ASSIGNED"
+  entityType  String
+  entityId    String
+  details     String?  // JSON details
+  ipAddress   String?
+  sha256Hash  String   // Cryptographic proof
+  createdAt   DateTime @default(now())
+
+  @@index([companyId])
+  @@index([action])
+}
+
+// 19. API Keys for External Integrations
+model ApiKey {
+  id          String    @id @default(cuid())
+  companyId   String
+  company     Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  name        String
+  keyPrefix   String
+  hashedKey   String
+  lastUsedAt  DateTime?
+  createdAt   DateTime  @default(now())
+
+  @@index([companyId])
+}
+
+// 20. Outbound Webhooks
+model Webhook {
+  id          String   @id @default(cuid())
+  companyId   String
+  company     Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  url         String
+  events      String   // Comma-separated event types
+  secret      String
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+
+  @@index([companyId])
+}
+
+// 21. In-App Notifications
+model Notification {
+  id          String   @id @default(cuid())
+  userId      String?
+  user        User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  employeeId  String?
+  employee    Employee? @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  title       String
+  message     String
+  isRead      Boolean  @default(false)
+  link        String?
+  createdAt   DateTime @default(now())
+
+  @@index([userId])
+  @@index([employeeId])
+}
+
+// 22. Connected ATS Tools (Greenhouse, Lever)
+model Integration {
+  id          String   @id @default(cuid())
+  companyId   String
+  company     Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  provider    String   // GREENHOUSE, LEVER, SLACK, TEAMS
+  credentials String   // Encrypted token/webhook secret
+  isEnabled   Boolean  @default(true)
+  createdAt   DateTime @default(now())
+
+  @@index([companyId])
+}
+
+// 23. Team Members for Org Chart Relationships
+model TeamMember {
+  id          String   @id @default(cuid())
+  employeeId  String   @unique
+  employee    Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  title       String
+  bio         String?
+  location    String?  @default("Remote, USA")
+  skills      String?  // Comma-separated
+  createdAt   DateTime @default(now())
+}
+
+// 24. Custom Fields for Org-Specific Schema
+model CustomField {
+  id          String   @id @default(cuid())
+  companyId   String
+  company     Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  fieldName   String
+  fieldType   String   // text, number, date, boolean
+  isRequired  Boolean  @default(false)
+  createdAt   DateTime @default(now())
+
+  @@index([companyId])
+}
+
+// 25. SaaS Billing & Subscriptions
+model Subscription {
+  id          String   @id @default(cuid())
+  companyId   String
+  company     Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  planName    String   @default("Growth SME")
+  status      String   @default("ACTIVE")
+  maxSeats    Int      @default(50)
+  currentSeats Int     @default(12)
+  billingCycle String  @default("MONTHLY") // $99/mo or $10/hire
+  renewalDate DateTime
+  createdAt   DateTime @default(now())
+
+  @@index([companyId])
+}
+
+// 26. Employee Certifications & Expiry Tracking
+model Certification {
+  id                String    @id @default(cuid())
+  employeeId        String
+  name              String    // e.g. AWS Certified Solutions Architect, CPR First Aid
+  issuingAuthority  String    // Amazon Web Services, Red Cross
+  licenseNumber     String?
+  issueDate         DateTime
+  expiryDate        DateTime
+  status            String    @default("ACTIVE") // ACTIVE, EXPIRING_SOON, EXPIRED
+  credentialUrl     String?
+  createdAt         DateTime  @default(now())
+
+  @@index([employeeId])
+}
+
+// 27. Background Check & Checkr Screening
+model BackgroundCheck {
+  id             String    @id @default(cuid())
+  candidateId    String    // Employee ID
+  candidateName  String
+  provider       String    @default("Checkr")
+  status         String    @default("CLEAR") // CLEAR, PENDING, CONSIDER
+  tier           String    @default("Comprehensive Criminal & MVR")
+  reportUrl      String?
+  completedAt    DateTime?
+  createdAt      DateTime  @default(now())
+
+  @@index([candidateId])
+}
+
+// 28. DHS E-Verify US Compliance
+model EVerifyCase {
+  id             String    @id @default(cuid())
+  employeeId     String
+  caseNumber     String    @unique // e.g. 2026E-VER-98421
+  status         String    @default("EMPLOYMENT_AUTHORIZED") // EMPLOYMENT_AUTHORIZED, TNC, DRAFT
+  documentType   String    // US Passport, Green Card, Driver's License + SSN
+  submissionDate DateTime  @default(now())
+  verifiedAt     DateTime?
+  eligibilityCode String   @default("AUTH-A1")
+
+  @@index([employeeId])
+}
+
+// 29. Anonymous Whistleblower Complaints
+model WhistleblowerReport {
+  id             String    @id @default(cuid())
+  trackingToken  String    @unique // Secret SHA-256 access token for reporter
+  category       String    // Compliance, Ethics, Financial, Harassment, Safety
+  details        String    // Encrypted report narrative
+  status         String    @default("SUBMITTED") // SUBMITTED, UNDER_INVESTIGATION, RESOLVED
+  resolutionNotes String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+}
+
+// 30. Office Map & Workstation Desks
+model OfficeDesk {
+  id             String    @id @default(cuid())
+  deskCode       String    @unique // e.g. SF-FL2-D14
+  floor          Int       @default(2)
+  zone           String    // Engineering Pod A, Product Bay, Executive Corner
+  status         String    @default("AVAILABLE") // AVAILABLE, OCCUPIED, RESERVED
+  assignedToId   String?   // Employee ID
+  assignedToName String?
+  coordinatesX   Int       @default(150)
+  coordinatesY   Int       @default(120)
+}
+
+// 31. New Hire Welcome Swag Orders
+model SwagOrder {
+  id             String    @id @default(cuid())
+  employeeId     String
+  employeeName   String
+  kitType        String    @default("Welcome Executive Swag Pack")
+  shirtSize      String    @default("L") // XS, S, M, L, XL, 2XL
+  shippingAddress String
+  status         String    @default("DISPATCHED") // ORDERED, DISPATCHED, DELIVERED
+  carrier        String    @default("FedEx Priority")
+  trackingNumber String    @default("FDX-998234101")
+  dispatchedAt   DateTime  @default(now())
+
+  @@index([employeeId])
+}
+
+// 32. Headcount Job Requisitions
+model JobRequisition {
+  id              String    @id @default(cuid())
+  requisitionCode String    @unique // e.g. REQ-ENG-2026-04
+  title           String
+  department      String
+  hiringManager   String
+  targetStartDate DateTime
+  status          String    @default("APPROVED") // DRAFT, PENDING_APPROVAL, APPROVED, FILLED
+  salaryRange     String    @default("$170,000 - $210,000")
+  jobDescription  String
+  createdAt       DateTime  @default(now())
+}
+
+// 33. SCORM 1.2 / 2004 Training Courses
+model ScormCourse {
+  id              String    @id @default(cuid())
+  title           String
+  version         String    @default("SCORM 2004 4th Edition")
+  durationMinutes Int       @default(25)
+  passingScore    Int       @default(80)
+  totalModules    Int       @default(4)
+  packageUrl      String
+  category        String    @default("Compliance & Cybersecurity")
+}
+
+// 34. Scheduled Enterprise Reports
+model ScheduledReport {
+  id          String    @id @default(cuid())
+  name        String    // e.g. Weekly Executive Onboarding Digest
+  reportType  String    // COHORT_PROGRESS, ENPS_SATISFACTION, AUDIT_LOGS, COMPLIANCE
+  frequency   String    @default("WEEKLY") // DAILY, WEEKLY, MONTHLY
+  recipients  String    // Comma-separated email list
+  status      String    @default("ACTIVE")
+  lastRunAt   DateTime?
+  nextRunAt   DateTime?
+  createdAt   DateTime  @default(now())
+}
+
+// 35. Tenant Custom Domains & SSL
+model TenantDomain {
+  id          String    @id @default(cuid())
+  domain      String    @unique // e.g. onboarding.acme-enterprises.com
+  cnameTarget String    @default("cname.onboardx.io")
+  sslStatus   String    @default("ACTIVE") // PENDING_VERIFICATION, PROVISIONING, ACTIVE
+  dnsVerified Boolean   @default(true)
+  createdAt   DateTime  @default(now())
+}
+
+// 36. Enterprise Single Sign-On (SAML / Azure AD)
+model SsoConfiguration {
+  id              String    @id @default(cuid())
+  providerName    String    @default("Okta SAML 2.0") // Okta, Azure AD, Google Workspace
+  entityId        String    @default("https://idp.acme.com/saml/metadata")
+  ssoUrl          String    @default("https://idp.acme.com/app/onboardx/sso/saml")
+  certificateFingerprint String @default("SHA256:7B:3E:91:02:FA:11:...")
+  scimSyncEnabled Boolean   @default(true)
+  isEnabled       Boolean   @default(true)
+  updatedAt       DateTime  @updatedAt
+}

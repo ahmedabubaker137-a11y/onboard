@@ -1,0 +1,41 @@
+name: OnboardX Enterprise CI/CD Pipeline
+
+on:
+  push:
+    branches: [main, master, staging]
+  pull_request:
+    branches: [main, master, staging]
+
+jobs:
+  validate:
+    name: Lint, Typecheck & Quality Audit
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 20.x
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: "npm"
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Generate Prisma Client
+        run: npx prisma generate
+
+      - name: Typecheck TypeScript
+        run: npx tsc --noEmit
+
+      - name: Run Enterprise Cryptographic & Business Unit Tests
+        run: node --test test/unit-tests.mjs
+
+      - name: Build Next.js Production Bundle
+        run: npm run build
+        env:
+          DATABASE_URL: "postgresql://postgres:postgres@localhost:5432/onboardx_test?schema=public"
+          NEXTAUTH_SECRET: "ci-test-secret-32-chars-long-onboardx"
+          PII_ENCRYPTION_KEY: "ci-test-pii-encryption-key-256"
